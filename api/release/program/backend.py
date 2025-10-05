@@ -113,12 +113,12 @@ def regex_for_current_temperature():
 def regex_for_target_temperature():
     """ T0:210 /210 B:0 /0 """
 
-    return '\/(-?[0-9].*?) '
+    return r'\/(-?[0-9].*?) '
 
 def regex_for_progress():
     """ T0:210 /210 B:0 /0 """
 
-    return '([0-9].*)\/([0-9].*?)\\r'
+    return r'([0-9].*)\/([0-9].*?)\\r'
 
 #! socket_handler.py
 
@@ -237,31 +237,65 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Command not found'}).encode())
 
 def get_ip(ip_addr_proto="ipv4", ignore_local_ips=True):
+    fam = {
+        "ipv4": socket.AF_INET,
+        "ipv6": socket.AF_INET6,
+        "both": socket.AF_UNSPEC,
+    }.get(ip_addr_proto, socket.AF_INET)
 
-    af_inet = 2
-    if ip_addr_proto == "ipv6":
-        af_inet = 30
-    elif ip_addr_proto == "both":
-        af_inet = 0
+    ips = set()
 
-    system_ip_list = getaddrinfo(gethostname(), None, af_inet, 1, 0)
-    ip_list = []
+    # Try hostname-based discovery first (may return only loopback on some hosts)
+    try:
+        infos = socket.getaddrinfo(
+            socket.gethostname(),
+            None,
+            fam,
+            socket.SOCK_DGRAM,
+            0,
+            socket.AI_ADDRCONFIG
+        )
+    except socket.gaierror:
+        infos = []
 
-    for ip in system_ip_list:
-        ip = ip[4][0]
-
+    for f, _t, _p, _c, sockaddr in infos:
+        addr = sockaddr[0]
         try:
-            ipaddress.ip_address(str(ip))
-            ip_address_valid = True
+            ip = ipaddress.ip_address(addr)
         except ValueError:
-            ip_address_valid = False
-        else:
-            if ipaddress.ip_address(ip).is_loopback and ignore_local_ips or ipaddress.ip_address(ip).is_link_local and ignore_local_ips:
-                pass
-            elif ip_address_valid:
-                ip_list.append(ip)
+            continue
 
-    return ip_list
+        if ignore_local_ips and (ip.is_loopback or ip.is_link_local):
+            continue
+        if ip.is_unspecified or ip.is_multicast:
+            continue
+
+        # If fam was AF_UNSPEC ("both"), we’ll accept both v4 and v6 here.
+        ips.add(addr)
+
+    # Fallback: derive primary outbound address (no packets are sent)
+    if not ips:
+        fams = [socket.AF_INET, socket.AF_INET6] if ip_addr_proto == "both" else [fam]
+        for f in fams:
+            try:
+                s = socket.socket(f, socket.SOCK_DGRAM)
+                # Any reachable public IP works; this triggers a route lookup only.
+                target = ("8.8.8.8", 80) if f == socket.AF_INET else ("2001:4860:4860::8888", 80)
+                s.connect(target)
+                addr = s.getsockname()[0]
+                ip = ipaddress.ip_address(addr)
+                if not (ignore_local_ips and (ip.is_loopback or ip.is_link_local)) \
+                   and not (ip.is_unspecified or ip.is_multicast):
+                    ips.add(addr)
+            except OSError:
+                pass
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+    return sorted(ips)
 
 def run():
     
