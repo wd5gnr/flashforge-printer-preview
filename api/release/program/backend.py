@@ -113,12 +113,12 @@ def regex_for_current_temperature():
 def regex_for_target_temperature():
     """ T0:210 /210 B:0 /0 """
 
-    return r'\/(-?[0-9].*?) '
+    return '/(-?[0-9].*?) '
 
 def regex_for_progress():
     """ T0:210 /210 B:0 /0 """
 
-    return r'([0-9].*)\/([0-9].*?)\\r'
+    return '([0-9].*)/([0-9].*?)\\r'
 
 #! socket_handler.py
 
